@@ -1,0 +1,179 @@
+#variables
+
+SUBSCRIPTIONID=$(az account show --query id -o tsv)
+TENANTID=$(az account show --query tenantId -o tsv)
+REGION_NAME=eastus
+RESOURCE_GROUP=akslab
+AKS_VNET_NAME=akslab-vnet
+AKS_SUBNET_NAME=aks-subnet
+AKS_VNET_ADDRESSPACE="10.0.0.0/15"
+AKS_SUBNET_ADDRESSSPACE="10.1.0.0/16"
+AKS_ID=$RANDOM
+AKS_CLUSTER_NAME="akslab-$AKS_ID"
+AKS_SP_NAME=akslabsp
+AKS_SP_SECRET=$(uuidgen)
+AKS_NODE_COUNT=1
+AKS_NODE_MAX_COUNT=5
+AKS_NODE_MIN_COUNT=1
+AKS_NODE_VM_SIZE=Standard_B2ms
+AKS_NODE_OS_DISK_SIZE=32
+ACR_NAME="acr$AKS_ID"
+AKS_INGRESS_PIP_NAME="$AKS_CLUSTER_NAME-ingress"
+AKS_WORKSPACE="akslab-workspace-$AKS_ID"
+
+# Read secrets for .variables file
+# AKS_PUBLIC_ENDPOINT_DNS_ZONE_RG=
+# AKS_PUBLIC_ENDPOINT_DNS_ZONE=
+# EMAIL_ADDRESS=
+
+source .variables
+
+# Create resource group
+
+az group create \
+    --name $RESOURCE_GROUP \
+    --location $REGION_NAME
+
+# Create virtual network
+
+az network vnet create \
+    --resource-group $RESOURCE_GROUP \
+    --location $REGION_NAME \
+    --name $AKS_VNET_NAME \
+    --address-prefixes $AKS_VNET_ADDRESSPACE \
+    --subnet-name $AKS_SUBNET_NAME \
+    --subnet-prefix $AKS_SUBNET_ADDRESSSPACE
+
+AKS_SUBNET_ID=$(az network vnet subnet show \
+    --resource-group $RESOURCE_GROUP \
+    --vnet-name $AKS_VNET_NAME \
+    --name $AKS_SUBNET_NAME \
+    --query id -o tsv)
+
+# Deploy Log Analytics Workspace
+
+az monitor log-analytics workspace create \
+    --resource-group $RESOURCE_GROUP \
+    --workspace-name $AKS_WORKSPACE
+
+AKS_WORKSPACE_ID=$(az monitor log-analytics workspace show \
+    --resource-group $RESOURCE_GROUP \
+    --workspace-name $AKS_WORKSPACE \
+    --query id -o tsv)
+
+# Provision an ACR
+
+az acr create \
+    --resource-group $RESOURCE_GROUP \
+    --location $REGION_NAME \
+    --name $ACR_NAME \
+    --sku Standard
+
+ACR_ENDPOINT=$(az acr show -g $RESOURCE_GROUP --name $ACR_NAME --query loginServer -o tsv)
+
+# Deploy AKS Cluster using latest supported version
+
+VERSION=$(az aks get-versions \
+    --location $REGION_NAME \
+    --query 'orchestrators[?!isPreview] | [-1].orchestratorVersion' \
+    --output tsv)
+
+az ad sp create-for-rbac --name $AKS_SP_NAME --skip-assignment true
+
+az ad sp credential reset --name $AKS_SP_NAME --password $AKS_SP_SECRET
+
+AKS_SP_ID=$(az ad sp show --id "http://$AKS_SP_NAME" --query appId -o tsv)
+
+az role assignment create \
+    --assignee $AKS_SP_ID \
+    --role "Contributor" \
+    --scope /subscriptions/$SUBSCRIPTIONID/resourceGroups/$RESOURCE_GROUP
+
+az aks create \
+--resource-group $RESOURCE_GROUP \
+--name $AKS_CLUSTER_NAME \
+--service-principal $AKS_SP_ID \
+--client-secret $AKS_SP_SECRET \
+--vm-set-type VirtualMachineScaleSets \
+--node-count $AKS_NODE_COUNT \
+--enable-cluster-autoscaler \
+--max-count $AKS_NODE_MAX_COUNT \
+--min-count $AKS_NODE_MIN_COUNT \
+--node-count $AKS_NODE_COUNT \
+--node-vm-size $AKS_NODE_VM_SIZE \
+--node-osdisk-size $AKS_NODE_OS_DISK_SIZE \
+--load-balancer-sku standard \
+--location $REGION_NAME \
+--kubernetes-version $VERSION \
+--network-plugin azure \
+--vnet-subnet-id $AKS_SUBNET_ID \
+--service-cidr 10.255.0.0/16 \
+--dns-service-ip 10.255.0.10 \
+--docker-bridge-address 172.17.0.1/16 \
+--enable-addons monitoring \
+--workspace-resource-id $AKS_WORKSPACE_ID \
+--attach-acr $ACR_NAME \
+--generate-ssh-keys
+
+# Configure kubectl
+
+az aks get-credentials \
+    --resource-group $RESOURCE_GROUP \
+    --name $AKS_CLUSTER_NAME
+
+# Enable Live Logs
+
+kubectl apply -f LiveLogReaderRBAC.yaml
+
+# Deploy nginx ingress controller
+
+az network public-ip create \
+    --resource-group $RESOURCE_GROUP \
+    --name $AKS_INGRESS_PIP_NAME \
+    --sku Standard \
+    --allocation-method static \
+    --dns-name $AKS_INGRESS_PIP_NAME
+
+AKS_INGRESS_PIP=$(az network public-ip show --name $AKS_INGRESS_PIP_NAME --resource-group $RESOURCE_GROUP --query ipAddress -o tsv)
+AKS_INGRESS_PIP_FQDN=$(az network public-ip show --name $AKS_INGRESS_PIP_NAME --resource-group $RESOURCE_GROUP --query dnsSettings.fqdn -o tsv)
+
+az network dns record-set CNAME set-record \
+    --resource-group $AKS_PUBLIC_ENDPOINT_DNS_ZONE_RG \
+    --zone-name $AKS_PUBLIC_ENDPOINT_DNS_ZONE \
+    --record-set-name "*" \
+    --cname $AKS_INGRESS_PIP_FQDN
+
+kubectl create namespace ingress
+
+helm repo add stable https://kubernetes-charts.storage.googleapis.com/
+helm repo update
+
+helm install nginx-ingress stable/nginx-ingress \
+    --namespace ingress \
+    --set controller.replicaCount=2 \
+    --set controller.nodeSelector."beta\.kubernetes\.io/os"=linux \
+    --set defaultBackend.nodeSelector."beta\.kubernetes\.io/os"=linux \
+    --set controller.stats.enabled=true \
+    --set controller.metrics.enabled=true \
+    --set controller.service.loadBalancerIP=$AKS_INGRESS_PIP \
+    --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-resource-group"=$RESOURCE_GROUP
+
+# Deploy certmanager
+
+kubectl create namespace cert-manager
+
+helm repo add jetstack https://charts.jetstack.io
+helm repo update
+
+kubectl apply --validate=false -f https://raw.githubusercontent.com/jetstack/cert-manager/release-0.14/deploy/manifests/00-crds.yaml
+
+helm install cert-manager \
+    --namespace cert-manager \
+    --version v0.14.0 \
+    jetstack/cert-manager
+
+sed -i "s/EMAIL_ADDRESS/$EMAIL_ADDRESS/g" cluster-issuer.yaml
+
+kubectl apply \
+    --namespace cert-manager \
+    -f cluster-issuer.yaml

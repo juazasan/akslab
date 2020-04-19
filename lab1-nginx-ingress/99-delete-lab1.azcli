@@ -1,0 +1,20 @@
+# Rollback changes to charts
+
+sed -i "s/$AKS_PUBLIC_ENDPOINT_DNS_ZONE/AKS_PUBLIC_ENDPOINT_DNS_ZONE/g" ratings-web-ingress.yaml
+sed -i "s/$EMAIL_ADDRESS/EMAIL_ADDRESS/g" cluster-issuer.yaml
+sed -i "s/$ACR_ENDPOINT/ACR_ENDPOINT/g" ratings-api-deployment.yaml
+sed -i "s/$ACR_ENDPOINT/ACR_ENDPOINT/g" ratings-web-deployment.yaml
+
+# Delete ratings app
+
+kubectl delete -f ratings-web-ingress.yaml --namespace ratingsapp
+kubectl delete -f ratings-web-service.yaml --namespace ratingsapp
+kubectl delete -f ratings-web-deployment.yaml --namespace ratingsapp
+kubectl delete -f ratings-api-service.yaml --namespace ratingsapp
+kubectl delete -f ratings-api-deployment.yaml --namespace ratingsapp
+helm delete ratingsdb  --namespace ratingsapp
+kubectl delete namespace ratingsapp
+
+# Delete akslab
+
+az group delete --name akslab -y --no-wait

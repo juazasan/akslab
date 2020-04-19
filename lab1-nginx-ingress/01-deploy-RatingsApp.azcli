@@ -1,0 +1,84 @@
+
+# Variables
+
+LABDIR=$(dirname "$(pwd)")
+MONGODBUSERNAME=mongodb
+MONGODBPASSWORD=$(uuidgen)
+
+# Create a namespace for the application
+
+kubectl create namespace ratingsapp
+
+# Build the ratings API container using ACR builds
+
+cd $LABDIR
+
+git clone https://github.com/MicrosoftDocs/mslearn-aks-workshop-ratings-api.git
+
+cd mslearn-aks-workshop-ratings-api
+
+az acr build \
+    --registry $ACR_NAME \
+    --image ratings-api:v1 .
+
+# Build the ratings Front-end container using ACR builds
+
+cd ..
+
+git clone https://github.com/MicrosoftDocs/mslearn-aks-workshop-ratings-web.git
+
+cd mslearn-aks-workshop-ratings-web
+
+az acr build \
+    --registry $ACR_NAME \
+    --image ratings-web:v1 .
+
+# Verify the images are available in ACR
+
+az acr repository list \
+    --name $ACR_NAME \
+    --output table
+
+# Deploy ratings MongoDB server
+
+helm install ratingsdb stable/mongodb \
+    --namespace ratingsapp \
+    --set mongodbUsername=$MONGODBUSERNAME,mongodbPassword=$MONGODBPASSWORD,mongodbDatabase=ratingsdb
+
+MONGOCONNECTION="mongodb://$MONGODBUSERNAME:$MONGODBPASSWORD@ratingsdb-mongodb.ratingsapp.svc.cluster.local:27017/ratingsdb"
+
+kubectl create secret generic mongosecret \
+    --namespace ratingsapp \
+    --from-literal=MONGOCONNECTION=$MONGOCONNECTION
+
+# Deploy ratings-api
+
+cd ..
+
+sed -i "s/ACR_ENDPOINT/$ACR_ENDPOINT/g" ratings-api-deployment.yaml
+
+kubectl apply \
+    --namespace ratingsapp \
+    -f ratings-api-deployment.yaml
+
+kubectl apply \
+    --namespace ratingsapp \
+    -f ratings-api-service.yaml
+
+# Deploy ratings-web
+
+sed -i "s/ACR_ENDPOINT/$ACR_ENDPOINT/g" ratings-web-deployment.yaml
+
+kubectl apply \
+    --namespace ratingsapp \
+    -f ratings-web-deployment.yaml
+
+kubectl apply \
+    --namespace ratingsapp \
+    -f ratings-web-service.yaml
+
+sed -i "s/AKS_PUBLIC_ENDPOINT_DNS_ZONE/$AKS_PUBLIC_ENDPOINT_DNS_ZONE/g" ratings-web-ingress.yaml
+
+kubectl apply \
+    --namespace ratingsapp \
+    -f ratings-web-ingress.yaml
