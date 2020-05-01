@@ -1,0 +1,45 @@
+# create namespace
+
+kubectl create namespace prometheusdemoapp
+
+# Build the test application container using ACR builds
+
+git clone https://github.com/juazasan/azure-pipelines-canary-k8s
+
+az acr build \
+    --registry $ACR_NAME \
+    --image prometheusdemoapp:v1 ./azure-pipelines-canary-k8s/app
+
+# Deploy the test app to the cluster
+
+sed -i "s/ACR_ENDPOINT/$ACR_ENDPOINT/g" ./azure-pipelines-canary-k8s/manifests/deployment.yaml
+
+kubectl apply \
+    --namespace prometheusdemoapp \
+    -f ./azure-pipelines-canary-k8s/manifests/deployment.yml
+
+kubectl apply \
+    --namespace prometheusdemoapp \
+    -f ./azure-pipelines-canary-k8s/manifests/service.yml
+
+# Start load test
+
+kubectl run artillery --image azch/artillery \
+    --replicas=1 --limits='cpu=200m,memory=512Mi' \
+    --command -- artillery quick -r 10  -d 6000 http://prometheusdemoapp:8080
+
+# Open Grafana and create a new dashboard by importing prometheusdemoapp_dashboard.json or create a new one using the query below
+
+# InsightsMetrics
+# | where Namespace == "prometheus"
+# | extend tags=parse_json(Tags)
+# | where Name contains "requests_total"
+# | where tags.app == "prometheusdemoapp"
+# | project TimeGenerated , app=tags.app, pod_name=tags.pod_name, result=tags.custom_status, Val
+# | summarize success_rate=sumif(Val, result=="good") / sum(Val) by bin(TimeGenerated,5m)
+# | where $__timeFilter(TimeGenerated)
+
+
+
+
+

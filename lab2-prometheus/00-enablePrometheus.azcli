@@ -1,0 +1,79 @@
+# variables
+
+SUBSCRIPTIONID=$(az account show --query id -o tsv)
+TENANTID=$(az account show --query tenantId -o tsv)
+RESOURCE_GROUP=akslab
+AKS_CLUSTER_NAME=$(az aks list --query '[].name' -o tsv -g $RESOURCE_GROUP)
+ACR_NAME=$(echo $AKS_CLUSTER_NAME | sed -e "s/akslab-/acr/g")
+ACR_ENDPOINT=$(az acr show -g $RESOURCE_GROUP --name $ACR_NAME --query loginServer -o tsv)
+AKS_WORKSPACE=$(echo $AKS_CLUSTER_NAME | sed -e "s/akslab-/akslab-workspace-/g")
+AKS_WORKSPACE_ID=$(az monitor log-analytics workspace show \
+    --resource-group $RESOURCE_GROUP \
+    --workspace-name $AKS_WORKSPACE \
+    --query customerId -o tsv)
+    
+source ../.variables
+
+# Configure kubectl (if not configured yet)
+
+az aks get-credentials \
+    --resource-group $RESOURCE_GROUP \
+    --name $AKS_CLUSTER_NAME
+
+# Configure Azure Monitor Agent to scrap metrics from pods
+
+kubectl apply -f container-azm-ms-agentconfig.yaml
+
+# Deploy Grafana
+
+## Create Service Principal
+
+GRAFANA_SP_NAME="$AKS_CLUSTER_NAME-grafana"
+GRAFANA_SP_SECRET=$(uuidgen)
+
+az ad sp create-for-rbac --name $GRAFANA_SP_NAME --skip-assignment true
+az ad sp credential reset --name $GRAFANA_SP_NAME --password $GRAFANA_SP_SECRET
+
+GRAFANA_SP_ID=$(az ad sp show --id "http://$GRAFANA_SP_NAME" --query appId -o tsv)
+
+az role assignment create \
+    --assignee $GRAFANA_SP_ID \
+    --role "Log Analytics Reader" \
+    --scope /subscriptions/$SUBSCRIPTIONID/resourceGroups/$RESOURCE_GROUP
+
+helm repo update
+
+GRAFANA_ADMIN_PASSWORD=$(uuidgen)
+
+kubectl create namespace grafana
+
+kubectl create secret generic grafana-env \
+    --namespace grafana \
+    --from-literal=SUBSCRIPTIONID=$SUBSCRIPTIONID \
+    --from-literal=TENANTID=$TENANTID \
+    --from-literal=CLIENTID=$GRAFANA_SP_ID \
+    --from-literal=CLIENTSECRET=$GRAFANA_SP_SECRET \
+    --from-literal=WORKSPACE=$AKS_WORKSPACE_ID
+
+kubectl apply \
+    --namespace grafana \
+    -f ./grafana-datasources.yaml
+
+kubectl apply \
+    --namespace grafana \
+    -f ./grafana-dashboards-aks.yaml    
+
+helm install grafana --namespace grafana \
+    --set persistence.enabled=true \
+    --set adminPassword=$GRAFANA_ADMIN_PASSWORD \
+    --set envFromSecret=grafana-env \
+    --set sidecar.datasources.enabled=true \
+    --set sidecar.dashboards.enabled=true \
+    stable/grafana
+    #--set plugins="grafana-azure-monitor-datasource" \
+    #-f grafana-values.yaml \
+
+# Open graphana GUI and make sure Azure Monitor datasource was properly configured
+GRAFANA_ADMIN_PASSWORD=$(kubectl get secret --namespace grafana grafana -o jsonpath="{.data.admin-password}" | base64 --decode ; echo)
+GRAFANA_POD_NAME=$(kubectl get pods --namespace grafana -l "app.kubernetes.io/name=grafana" -o jsonpath="{.items[0].metadata.name}")
+kubectl port-forward $GRAFANA_POD_NAME 3000:3000 --namespace grafana

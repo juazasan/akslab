@@ -1,0 +1,16 @@
+# Rollback changes to charts
+
+sed -i "s/$ACR_ENDPOINT/ACR_ENDPOINT/g" ./azure-pipelines-canary-k8s/manifests/deployment.yaml
+
+# Delete the prometheusapp
+
+kubectl delete namespace prometheusdemoapp
+
+# Uninstall grafana
+
+helm delete grafana
+kubectl delete namespace grafana
+
+# Delete akslab
+
+az group delete --name akslab -y --no-wait

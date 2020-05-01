@@ -8,10 +8,10 @@ metadata:
 spec:
   tls:
     - hosts:
-      - ratings.msft.labs.cloudinfraops.com # IMPORTANT: update <ingress ip> with the dashed public IP of your ingress, for example frontend.13-68-177-68.nip.io
+      - ratings.AKS_PUBLIC_ENDPOINT_DNS_ZONE # IMPORTANT: update <ingress ip> with the dashed public IP of your ingress, for example frontend.13-68-177-68.nip.io
       secretName: ratings-web-cert
   rules:
-  - host: ratings.msft.labs.cloudinfraops.com # IMPORTANT: update <ingress ip> with the dashed public IP of your ingress, for example frontend.13-68-177-68.nip.io
+  - host: ratings.AKS_PUBLIC_ENDPOINT_DNS_ZONE # IMPORTANT: update <ingress ip> with the dashed public IP of your ingress, for example frontend.13-68-177-68.nip.io
     http:
       paths:
       - backend:

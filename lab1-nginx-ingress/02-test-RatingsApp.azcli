@@ -1,5 +1,23 @@
 LOADTEST_API_ENDPOINT="https://ratings.$AKS_PUBLIC_ENDPOINT_DNS_ZONE/api/loadtest"
 
+
+# Monitoring
+
+az container create \
+    -g $RESOURCE_GROUP \
+    -n loadtest \
+    --cpu 4 \
+    --memory 1 \
+    --image azch/artillery \
+    --restart-policy Never \
+    --command-line "artillery quick -r 10 -d 600 $LOADTEST_API_ENDPOINT"
+
+# Autoscaler
+
+kubectl apply \
+    --namespace ratingsapp \
+    -f ratings-api-hpa.yaml
+
 az container create \
     -g $RESOURCE_GROUP \
     -n loadtest \

@@ -26,7 +26,7 @@ AKS_WORKSPACE="akslab-workspace-$AKS_ID"
 # AKS_PUBLIC_ENDPOINT_DNS_ZONE=
 # EMAIL_ADDRESS=
 
-source .variables
+source ../.variables
 
 # Create resource group
 

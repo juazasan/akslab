@@ -1,1 +1,0 @@
-kubectl apply -f container-azm-ms-agentconfig.yaml
