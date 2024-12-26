@@ -10,7 +10,7 @@ az container create \
     --memory 1 \
     --image azch/artillery \
     --restart-policy Never \
-    --command-line "artillery quick -r 10 -d 600 $LOADTEST_API_ENDPOINT"
+    --command-line "artillery quick -r 20 -d 1200 $LOADTEST_API_ENDPOINT"
 
 # Autoscaler
 
